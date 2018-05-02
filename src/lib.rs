@@ -8,6 +8,7 @@ use std::time::Instant;
 use regex::Regex;
 
 type RouteHandler = Box<Fn(Option<&Request>) -> Response + Send + Sync + 'static>;
+#[derive(Clone)]
 pub enum Path {
     Str(String),
     Rex(Regex)
@@ -31,7 +32,8 @@ impl Response {
 pub struct Request {
     pub body: Option<String>,
     pub method: String,
-    pub path: String
+    pub path: String,
+    matched_path: Option<Path>
 }
 
 impl Request {
@@ -43,7 +45,27 @@ impl Request {
         Request {
             method: String::from(request_string.split_whitespace().next().unwrap()),
             body,
-            path: String::from(request_string.split_whitespace().nth(1).unwrap())
+            path: String::from(request_string.split_whitespace().nth(1).unwrap()),
+            matched_path: None
+        }
+    }
+
+    pub fn get_param(&self, name: &str) -> Option<&str> {
+        if let None = self.matched_path {
+            None
+        } else {
+            let mut params = None;
+            if let Some(Path::Rex(ref matched_path)) = self.matched_path {
+                for cap in matched_path.captures_iter(self.path.as_ref()) {
+                    params = match cap.name(name) {
+                        Some(x) => Some(x.as_str()),
+                        None => None
+                    };
+                }
+                params
+            } else {
+                None
+            }
         }
     }
 }
@@ -65,7 +87,7 @@ impl Server {
         let request_path: Vec<&str> = path_str.split_whitespace().collect();
         let path = request_path[1];
 
-        let req = Request::new(path_str.to_string());
+        let mut req = Request::new(path_str.to_string());
 
         let instant = Instant::now();
 
@@ -84,6 +106,7 @@ impl Server {
                 Path::Rex(ref x) => x.is_match(path)
             };
             if is_match {
+                req.matched_path = Some(route.0.clone());
                 res = Some((route.1)(Some(&req)));
                 break
             }
