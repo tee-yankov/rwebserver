@@ -1,0 +1,7 @@
+[package]
+name = "rwebserver"
+version = "0.1.0"
+authors = ["Theodore Yankov <tee.yankov@gmail.com>"]
+
+[dependencies]
+regex = "1.0.0"
