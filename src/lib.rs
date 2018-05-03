@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::collections::HashMap;
 use regex::Regex;
 
 type RouteHandler = Box<Fn(Option<&Request>) -> Response + Send + Sync + 'static>;
@@ -15,6 +16,7 @@ pub enum Path {
 }
 pub struct Route (pub Path, pub RouteHandler);
 
+#[derive(Clone)]
 pub struct Response {
     body: String,
     status: u32
@@ -76,39 +78,47 @@ struct Routes {
 }
 
 pub struct Server {
-    routes: Arc<Mutex<Routes>>
+    routes: Arc<Mutex<Routes>>,
+    request_cache: HashMap<String, Response>
 }
 
 impl Server {
-    fn handle_client(&self, mut stream: TcpStream) -> () {
+    fn handle_client(&mut self, mut stream: TcpStream) -> () {
         let mut buf: [u8; 512] = [0; 512];
         stream.read(&mut buf).unwrap();
         let path_str = String::from_utf8_lossy(&buf);
         let request_path: Vec<&str> = path_str.split_whitespace().collect();
         let path = request_path[1];
-
         let mut req = Request::new(path_str.to_string());
 
         let instant = Instant::now();
 
-        let mut res = None;
-        let routes = &self.routes.clone();
-        let routes = routes.lock().unwrap();
-        let routes = match req.method.as_ref() {
-            "GET" => &routes.get,
-            "POST" => &routes.post,
-            _ => &routes.get
-        };
-
-        for route in routes.iter() {
-            let is_match = match route.0 {
-                Path::Str(ref x) => path == x,
-                Path::Rex(ref x) => x.is_match(path)
+        let mut res: Option<Response> = None;
+        if self.request_cache.contains_key(path) {
+            res = Some(self.request_cache.get(path).unwrap().clone());
+        } else {
+            let routes = &self.routes.clone();
+            let routes = routes.lock().unwrap();
+            let routes = match req.method.as_ref() {
+                "GET" => &routes.get,
+                "POST" => &routes.post,
+                _ => &routes.get
             };
-            if is_match {
-                req.matched_path = Some(route.0.clone());
-                res = Some((route.1)(Some(&req)));
-                break
+
+            for route in routes.iter() {
+                let is_match = match route.0 {
+                    Path::Str(ref x) => path == x,
+                    Path::Rex(ref x) => x.is_match(path)
+                };
+                if is_match {
+                    req.matched_path = Some(route.0.clone());
+                    res = Some((route.1)(Some(&req)));
+                    break
+                }
+            }
+
+            if let Some(ref res) = res {
+                self.request_cache.insert(String::from(path), res.clone());
             }
         }
 
@@ -126,7 +136,8 @@ impl Server {
             routes: Arc::new(Mutex::new(Routes {
                 get: Vec::new(),
                 post: Vec::new()
-            }))
+            })),
+            request_cache: HashMap::new()
         }
     }
 
@@ -143,7 +154,7 @@ impl Server {
             let s = s.clone();
 
             pool.execute(move || {
-                let s = s.lock().unwrap();
+                let mut s = s.lock().unwrap();
                 s.handle_client(stream);
             })
         }
